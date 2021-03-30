@@ -11,37 +11,35 @@ from tqdm import tqdm
 from util import load_data, separate_data
 from models.graphcnn import GraphCNN
 from models.vgae import GCNModelVAE
-from models.loss import loss_function
+from models.loss import vgae_loss_function, loss_function
 
 
 def train_gin(args, model, device, train_graphs, optimizer, epoch, loss_fn):
     model.train()
 
     total_iters = args.iters_per_epoch
-    pbar = tqdm(range(total_iters), unit='batch')
-
     loss_accum = 0
-    for _ in pbar:
-        selected_idx = np.random.permutation(len(train_graphs))[:args.batch_size]
+    with tqdm(range(total_iters), unit='batch') as pbar:
+        for _ in pbar:
+            selected_idx = np.random.permutation(len(train_graphs))[:args.batch_size]
 
-        batch_graph = [train_graphs[idx] for idx in selected_idx]
-        output = model(batch_graph)
-        labels = torch.LongTensor([graph.label for graph in batch_graph]).to(device)
+            batch_graph = [train_graphs[idx] for idx in selected_idx]
+            output = model(batch_graph)
+            labels = torch.LongTensor([graph.label for graph in batch_graph]).to(device)
 
-        # compute loss
-        loss = loss_fn(output, labels)
-        print(output.shape, labels.shape)
-        # backprop
-        if optimizer is not None:
-            optimizer.zero_grad()
-            loss.backward()
-            optimizer.step()
+            # compute loss
+            loss = loss_fn(output, labels)
+            # backprop
+            if optimizer is not None:
+                optimizer.zero_grad()
+                loss.backward()
+                optimizer.step()
 
-        loss = loss.detach().cpu().numpy()
-        loss_accum += loss
+            loss = loss.detach().cpu().numpy()
+            loss_accum += loss
 
-        # report
-        pbar.set_description('epoch: %d' % (epoch))
+            # report
+            pbar.set_description('epoch: %d' % (epoch))
 
     average_loss = loss_accum / total_iters
     print("loss training: %f" % (average_loss))
@@ -53,35 +51,89 @@ def train_vgae(args, model, device, train_graphs, optimizer, epoch, loss_fn):
     model.train()
 
     total_iters = args.iters_per_epoch
-    pbar = tqdm(range(total_iters), unit='batch')
-
     loss_accum = 0
-    for _ in pbar:
-        selected_idx = np.random.permutation(len(train_graphs))[:args.batch_size]
 
-        batch_graph = [train_graphs[idx] for idx in selected_idx]
-        recovered_adjs, mus, logvars = model(batch_graph)
+    with tqdm(range(total_iters), unit='batch') as pbar:
+        for _ in pbar:
+            selected_idx = np.random.permutation(len(train_graphs))[:args.batch_size]
 
-        original_adjs = [train_graphs[idx].adj for idx in selected_idx]
-        n_nodes = [train_graphs[idx].node_features.shape[0] for idx in selected_idx]
-        norms = [adj.shape[0] * adj.shape[0] / float((adj.shape[0] * adj.shape[0] - adj.sum()) * 2)
-                 for adj in original_adjs]
-        # recovered_adjs, mus, logvars = torch.LongTensor([graph.label for graph in batch_graph]).to(device)
+            batch_graph = [train_graphs[idx] for idx in selected_idx]
+            recovered_adjs, mus, logvars = model(batch_graph)
 
-        # compute loss
-        loss = loss_fn(recovered_adjs, original_adjs, mus, logvars, n_nodes, norms, device)
+            original_adjs = [train_graphs[idx].adj for idx in selected_idx]
+            n_nodes = [train_graphs[idx].node_features.shape[0] for idx in selected_idx]
+            norms = [adj.shape[0] * adj.shape[0] / float((adj.shape[0] * adj.shape[0] - adj.sum()) * 2)
+                    for adj in original_adjs]
+            # recovered_adjs, mus, logvars = torch.LongTensor([graph.label for graph in batch_graph]).to(device)
 
-        # backprop
-        if optimizer is not None:
-            optimizer.zero_grad()
-            loss.backward()
-            optimizer.step()
+            # compute loss
+            loss = loss_fn(recovered_adjs, original_adjs, mus, logvars, n_nodes, norms, device)
 
-        loss = loss.detach().cpu().numpy()
-        loss_accum += loss
+            # backprop
+            if optimizer is not None:
+                optimizer.zero_grad()
+                loss.backward()
+                optimizer.step()
 
-        # report
-        pbar.set_description('epoch: %d' % (epoch))
+            loss = loss.detach().cpu().numpy()
+            loss_accum += loss
+
+            # report
+            pbar.set_description('epoch: %d' % (epoch))
+
+    average_loss = loss_accum / total_iters
+    print("loss training: %f" % (average_loss))
+
+    return average_loss
+
+
+def train(args, gin_model, vgae_model, device, train_graphs, optimizer1, optimizer2, epoch):
+    vgae_model.train()
+    gin_model.train()
+
+    total_iters = args.iters_per_epoch
+    loss_accum = 0
+
+    gin_loss_fn = nn.CrossEntropyLoss()
+    vage_loss_fn = vgae_loss_function
+
+    with tqdm(range(total_iters), unit='batch') as pbar:
+        for _ in pbar:
+            selected_idx = np.random.permutation(len(train_graphs))[:args.batch_size]
+
+            batch_graph = [train_graphs[idx] for idx in selected_idx]
+
+            recovered_adjs, mus, logvars = vgae_model(batch_graph)
+            preds = gin_model(batch_graph)
+
+            labels = torch.LongTensor([graph.label for graph in batch_graph]).to(device)
+            original_adjs = [train_graphs[idx].adj for idx in selected_idx]
+            n_nodes = [train_graphs[idx].node_features.shape[0] for idx in selected_idx]
+            norms = [adj.shape[0] * adj.shape[0] / float((adj.shape[0] * adj.shape[0] - adj.sum()) * 2)
+                    for adj in original_adjs]
+
+            # compute loss
+            vgae_loss = vage_loss_fn(recovered_adjs, original_adjs, mus, logvars, n_nodes, norms, device)
+            gin_loss = gin_loss_fn(preds, labels)
+            # loss = gin_loss + 0.05*vgae_loss.detach().clone()
+            loss = gin_loss
+
+            # backprop
+            if optimizer1:
+                optimizer1.zero_grad()
+                loss.backward()
+                optimizer1.step()
+
+            if optimizer2:
+                optimizer2.zero_grad()
+                vgae_loss.backward()
+                optimizer2.step()
+
+            loss = loss.detach().cpu().numpy()
+            loss_accum += loss
+
+            # report
+            pbar.set_description('epoch: %d' % (epoch))
 
     average_loss = loss_accum / total_iters
     print("loss training: %f" % (average_loss))
@@ -146,8 +198,10 @@ def main():
                         help='number of layers for MLP EXCLUDING the input one (default: 2). 1 means linear model.')
     parser.add_argument('--hidden_dim', type=int, default=64,
                         help='number of hidden units (default: 64)')
-    parser.add_argument('--vgae_hidden_dim', type=int, default=16,
-                        help='number of hidden units for vage (default: 16)')
+    parser.add_argument('--vgae_hidden_dim1', type=int, default=32,
+                        help='number of hidden units 1 for vage (default: 32)')
+    parser.add_argument('--vgae_hidden_dim2', type=int, default=16,
+                        help='number of hidden units 2 for vage (default: 16)')
     parser.add_argument('--final_dropout', type=float, default=0.5,
                         help='final layer dropout (default: 0.5)')
     parser.add_argument('--vage_dropout', type=float, default=0.5,
@@ -176,18 +230,16 @@ def main():
     # 10-fold cross validation. Conduct an experiment on the fold specified by args.fold_idx.
     train_graphs, test_graphs = separate_data(graphs, args.seed, args.fold_idx)
     #
-    # gin_model = GraphCNN(args.num_layers, args.num_mlp_layers, train_graphs[0].node_features.shape[1], args.hidden_dim,
-    #                      num_classes, args.final_dropout, args.learn_eps, args.graph_pooling_type,
-    #                      args.neighbor_pooling_type, device).to(device)
-    #
-    # optimizer = optim.Adam(gin_model.parameters(), lr=args.lr)
-    # scheduler = optim.lr_scheduler.StepLR(optimizer, step_size=50, gamma=0.5)
+    gin_model = GraphCNN(args.num_layers, args.num_mlp_layers, train_graphs[0].node_features.shape[1], args.hidden_dim,
+                         num_classes, args.final_dropout, args.learn_eps, args.graph_pooling_type,
+                         args.neighbor_pooling_type, device).to(device)
+    gin_optimizer = optim.Adam(gin_model.parameters(), lr=args.lr)
+    # scheduler = optim.lr_scheduler.StepLR(gin_optimizer, step_size=50, gamma=0.5)
     # gin_loss = nn.CrossEntropyLoss()
-    #
     # for epoch in range(1, args.epochs + 1):
     #     scheduler.step()
     #
-    #     avg_loss = train_gin(args, gin_model, device, train_graphs, optimizer, epoch, gin_loss)
+    #     avg_loss = train_gin(args, gin_model, device, train_graphs, gin_optimizer, epoch, gin_loss)
     #     acc_train, acc_test = test(gin_model, device, train_graphs, test_graphs)
     #
     #     if not args.filename == "":
@@ -198,22 +250,26 @@ def main():
     #     print(gin_model.eps)
 
     input_feat_dim = train_graphs[0].node_features.shape[1]
-    vgae_model = GCNModelVAE(input_feat_dim, args.hidden_dim, args.vgae_hidden_dim, args.vage_dropout, device).to(device)
-    vage_loss = loss_function
+    vgae_model = GCNModelVAE(input_feat_dim, args.vgae_hidden_dim1,
+                             args.vgae_hidden_dim2, args.vage_dropout, device, args, num_classes).to(device)
+    # vage_loss = loss_function
+    vage_optimizer = optim.Adam(vgae_model.parameters(), lr=args.lr)
 
-    optimizer = optim.Adam(vgae_model.parameters(), lr=args.lr)
-    scheduler = optim.lr_scheduler.StepLR(optimizer, step_size=50, gamma=0.5)
+    scheduler = optim.lr_scheduler.StepLR(gin_optimizer, step_size=50, gamma=0.5)
 
     for epoch in range(1, args.epochs + 1):
         scheduler.step()
-        avg_loss = train_vgae(args, vgae_model, device, train_graphs, optimizer, epoch, vage_loss)
-        # acc_train, acc_test = test(vgae_model, device, train_graphs, test_graphs)
+        # vgae_avg_loss = train_vgae(args, vgae_model, device, train_graphs, vage_optimizer, epoch, vage_loss)
+        # gin_avg_loss = train_gin(args, gin_model, device, train_graphs, gin_optimizer, epoch, gin_loss)
+        loss = train(args, gin_model, vgae_model, device, train_graphs, gin_optimizer, vage_optimizer, epoch)
+        acc_train, acc_test = test(gin_model, device, train_graphs, test_graphs)
 
-        if not args.filename == "":
-            with open(args.filename, 'w') as f:
-                f.write("Average Loss: %f" % (avg_loss))
-                f.write("\n")
-        # print(model.eps)
+    # if not args.filename == "":
+    #     with open(args.filename, 'w') as f:
+    #         f.write(f"VGAE Average Loss: {vgae_avg_loss} GIN Average Loss: {gin_avg_loss} "
+    #                 f"Training Accuracy: {acc_train} Test Accuracy: {acc_test}")
+    #         f.write("\n")
+    # print(model.eps)
 
 
 if __name__ == '__main__':
