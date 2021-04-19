@@ -1,4 +1,15 @@
 # GIN-VGAE
+## Usage
+To obtain the test accuracies reported in the final project paper
+```
+# GIN-VGAE
+python main.py --epochs 60 --dataset PTC
+python main.py --epochs 50
+
+# GIN
+python main.py --epochs 60 --dataset PTC --model GIN
+python main.py --epochs 50 --model GIN
+```
 
 ## Reference
 #### 1). GIN
