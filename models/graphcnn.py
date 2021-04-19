@@ -217,12 +217,13 @@ class GraphCNN(nn.Module):
 
         if calculate_score:
             score_over_layer = 0
-
-        # perform pooling over all nodes in each graph in every layer
+            # perform pooling over all nodes in each graph in every layer
             for layer, h in enumerate(hidden_rep):
                 pooled_h = torch.spmm(graph_pool, h)
                 score_over_layer += F.dropout(self.linears_prediction[layer](pooled_h), self.final_dropout,
-                                          training=self.training)
-
+                                              training=self.training)
             return score_over_layer
-        return hidden_rep[-1]
+        # return hidden_rep[-1]
+        rep = torch.cat(hidden_rep, 1).to(self.device)
+        dim_reduction = nn.Linear(rep.shape[-1], hidden_rep[-1].shape[1])
+        return F.dropout(dim_reduction(rep), self.final_dropout, training=self.training)
